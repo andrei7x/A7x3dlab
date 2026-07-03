@@ -1,0 +1,72 @@
+[
+  {
+    "id": "prod-plantador-geometrico",
+    "slug": "plantador-geometrico-facetado",
+    "name": "Plantador Geométrico Facetado",
+    "description": "Vaso decorativo impresso em PLA fosco com acabamento facetado e textura de camadas aparente. Ideal para mesas, estantes e setups.",
+    "category": "Decoração",
+    "price": 49.9,
+    "images": ["/images/products/plantador-geometrico.png"],
+    "stock": 8,
+    "isCustomizable": false,
+    "isFeatured": true,
+    "createdAt": "2026-06-23T21:00:00.000Z",
+    "updatedAt": "2026-06-23T21:00:00.000Z"
+  },
+  {
+    "id": "prod-chaveiros-geometricos",
+    "slug": "kit-chaveiros-geometricos",
+    "name": "Kit Chaveiros Geométricos",
+    "description": "Conjunto de chaveiros em formas geométricas, leve, resistente e disponível em cores variadas para brindes e lembranças.",
+    "category": "Chaveiros",
+    "price": 29.9,
+    "images": ["/images/products/chaveiros-geometricos.png"],
+    "stock": 24,
+    "isCustomizable": true,
+    "isFeatured": true,
+    "createdAt": "2026-06-23T21:05:00.000Z",
+    "updatedAt": "2026-06-23T21:05:00.000Z"
+  },
+  {
+    "id": "prod-organizador-modular",
+    "slug": "organizador-modular-de-mesa",
+    "name": "Organizador Modular de Mesa",
+    "description": "Módulos impressos em 3D para organizar canetas, cabos, clips, ferramentas pequenas e acessórios de escritório.",
+    "category": "Organizadores",
+    "price": 89.9,
+    "images": ["/images/products/organizador-modular.png"],
+    "stock": 6,
+    "isCustomizable": true,
+    "isFeatured": true,
+    "createdAt": "2026-06-23T21:10:00.000Z",
+    "updatedAt": "2026-06-23T21:10:00.000Z"
+  },
+  {
+    "id": "prod-caixa-presente",
+    "slug": "caixa-de-presente-personalizada",
+    "name": "Caixa de Presente Personalizada",
+    "description": "Peça decorativa sob medida para presentes especiais, com cores e detalhes combinados antes da produção.",
+    "category": "Presentes personalizados",
+    "price": 119.9,
+    "images": ["/images/products/presente-personalizado.png"],
+    "stock": 3,
+    "isCustomizable": true,
+    "isFeatured": true,
+    "createdAt": "2026-06-23T21:15:00.000Z",
+    "updatedAt": "2026-06-23T21:15:00.000Z"
+  },
+  {
+    "id": "prod-peca-sob-encomenda",
+    "slug": "peca-tecnica-sob-encomenda",
+    "name": "Peça Técnica Sob Encomenda",
+    "description": "Protótipos, suportes, engrenagens e peças funcionais impressas sob demanda a partir de medidas, referência ou arquivo 3D.",
+    "category": "Peças sob encomenda",
+    "price": 149.9,
+    "images": ["/images/products/peca-sob-encomenda.png"],
+    "stock": 10,
+    "isCustomizable": true,
+    "isFeatured": false,
+    "createdAt": "2026-06-23T21:20:00.000Z",
+    "updatedAt": "2026-06-23T21:20:00.000Z"
+  }
+]
