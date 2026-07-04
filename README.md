@@ -13,11 +13,4 @@ Loja virtual responsiva para produtos impressos em 3D, com painel administrativo
 - `otplib` + `qrcode` para 2FA TOTP
 - `nodemailer` para SMTP
 
-## Variaveis de ambiente
-
-Copie `.env.example` para `.env.local` e configure:
-
-```env
-
-```
 
