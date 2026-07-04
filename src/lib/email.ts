@@ -1,9 +1,5 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import nodemailer from "nodemailer";
 import { storeConfig } from "@/lib/config";
-
-const devEmailsFile = path.join(process.cwd(), "src", "data", "dev-emails.json");
 
 type MailMessage = {
   to: string;
@@ -16,23 +12,13 @@ function smtpConfigured() {
   return Boolean(process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_FROM);
 }
 
-async function storeDevEmail(message: MailMessage) {
-  await fs.mkdir(path.dirname(devEmailsFile), { recursive: true });
-
-  let messages: Array<MailMessage & { createdAt: string }> = [];
-  try {
-    messages = JSON.parse(await fs.readFile(devEmailsFile, "utf8"));
-  } catch {
-    messages = [];
-  }
-
-  messages.unshift({ ...message, createdAt: new Date().toISOString() });
-  await fs.writeFile(devEmailsFile, `${JSON.stringify(messages.slice(0, 25), null, 2)}\n`, "utf8");
-}
-
 export async function sendMail(message: MailMessage) {
   if (!smtpConfigured()) {
-    await storeDevEmail(message);
+    console.info("[dev-email]", {
+      to: message.to,
+      subject: message.subject,
+      text: message.text
+    });
     return { delivered: false, devMode: true };
   }
 
@@ -59,9 +45,9 @@ export async function sendMail(message: MailMessage) {
 export async function sendPasswordResetEmail(to: string, resetUrl: string) {
   return sendMail({
     to,
-    subject: "Redefinição de senha A7-3DLAB",
-    text: `Use este link para redefinir sua senha da ${storeConfig.name}: ${resetUrl}\n\nO link expira em breve. Se você não solicitou, ignore esta mensagem.`,
-    html: `<p>Use este link para redefinir sua senha da <strong>${storeConfig.name}</strong>:</p><p><a href="${resetUrl}">Redefinir senha</a></p><p>O link expira em breve. Se você não solicitou, ignore esta mensagem.</p>`
+    subject: "Redefinicao de senha A7-3DLAB",
+    text: `Use este link para redefinir sua senha da ${storeConfig.name}: ${resetUrl}\n\nO link expira em breve. Se voce nao solicitou, ignore esta mensagem.`,
+    html: `<p>Use este link para redefinir sua senha da <strong>${storeConfig.name}</strong>:</p><p><a href="${resetUrl}">Redefinir senha</a></p><p>O link expira em breve. Se voce nao solicitou, ignore esta mensagem.</p>`
   });
 }
 
@@ -69,7 +55,7 @@ export async function sendPasswordChangedEmail(to: string) {
   return sendMail({
     to,
     subject: "Senha alterada na A7-3DLAB",
-    text: `Sua senha da ${storeConfig.name} foi alterada. Se você não reconhece esta ação, acesse a loja e redefina sua senha imediatamente.`,
-    html: `<p>Sua senha da <strong>${storeConfig.name}</strong> foi alterada.</p><p>Se você não reconhece esta ação, acesse a loja e redefina sua senha imediatamente.</p>`
+    text: `Sua senha da ${storeConfig.name} foi alterada. Se voce nao reconhece esta acao, acesse a loja e redefina sua senha imediatamente.`,
+    html: `<p>Sua senha da <strong>${storeConfig.name}</strong> foi alterada.</p><p>Se voce nao reconhece esta acao, acesse a loja e redefina sua senha imediatamente.</p>`
   });
 }

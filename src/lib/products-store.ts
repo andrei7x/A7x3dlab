@@ -1,9 +1,23 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { CATEGORIES, Product, ProductPayload } from "@/lib/types";
+import { getSupabaseAdmin, getSupabaseAdminOrNull } from "@/lib/supabase";
 
-const productsFile = path.join(process.cwd(), "src", "data", "products.json");
+const PRODUCT_IMAGES_BUCKET = "product-images";
+
+type ProductRow = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: ProductPayload["category"];
+  price: number | string;
+  images: string[] | null;
+  stock: number | null;
+  is_customizable: boolean | null;
+  is_featured: boolean | null;
+  created_at: string;
+  updated_at: string;
+};
 
 function isValidCategory(value: string): value is ProductPayload["category"] {
   return CATEGORIES.includes(value as ProductPayload["category"]);
@@ -18,25 +32,51 @@ export function slugify(value: string) {
     .replace(/(^-|-$)+/g, "");
 }
 
-async function ensureStore() {
-  await fs.mkdir(path.dirname(productsFile), { recursive: true });
+function mapProductRow(row: ProductRow): Product {
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    description: row.description,
+    category: row.category,
+    price: Number(row.price),
+    images: row.images || [],
+    stock: row.stock || 0,
+    isCustomizable: Boolean(row.is_customizable),
+    isFeatured: Boolean(row.is_featured),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
 
-  try {
-    await fs.access(productsFile);
-  } catch {
-    await fs.writeFile(productsFile, "[]", "utf8");
-  }
+function toProductRow(product: Product) {
+  return {
+    id: product.id,
+    slug: product.slug,
+    name: product.name,
+    description: product.description,
+    category: product.category,
+    price: product.price,
+    images: product.images,
+    stock: product.stock,
+    is_customizable: product.isCustomizable,
+    is_featured: product.isFeatured,
+    created_at: product.createdAt,
+    updated_at: product.updatedAt
+  };
 }
 
 export async function readProducts() {
-  await ensureStore();
-  const raw = await fs.readFile(productsFile, "utf8");
-  return JSON.parse(raw) as Product[];
-}
+  const supabase = getSupabaseAdminOrNull();
+  if (!supabase) return [] as Product[];
 
-async function writeProducts(products: Product[]) {
-  await ensureStore();
-  await fs.writeFile(productsFile, `${JSON.stringify(products, null, 2)}\n`, "utf8");
+  const { data, error } = await supabase
+    .from("products")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(`Supabase products read failed: ${error.message}`);
+  return ((data || []) as ProductRow[]).map(mapProductRow);
 }
 
 function makeUniqueSlug(name: string, products: Product[], ignoredId?: string) {
@@ -81,54 +121,133 @@ export function validateProductPayload(payload: Partial<ProductPayload>) {
   } satisfies ProductPayload;
 }
 
+function decodeDataUrl(dataUrl: string) {
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) return null;
+
+  const [, contentType, base64] = match;
+  const extension =
+    contentType === "image/png"
+      ? "png"
+      : contentType === "image/webp"
+        ? "webp"
+        : contentType === "image/gif"
+          ? "gif"
+          : "jpg";
+
+  return {
+    contentType,
+    extension,
+    buffer: Buffer.from(base64, "base64")
+  };
+}
+
+async function uploadProductImages(productId: string, images: string[]) {
+  const supabase = getSupabaseAdmin();
+  const uploadedImages: string[] = [];
+
+  for (const image of images) {
+    const decoded = decodeDataUrl(image);
+
+    if (!decoded) {
+      uploadedImages.push(image);
+      continue;
+    }
+
+    const path = `${productId}/${randomUUID()}.${decoded.extension}`;
+    const { error } = await supabase.storage
+      .from(PRODUCT_IMAGES_BUCKET)
+      .upload(path, decoded.buffer, {
+        contentType: decoded.contentType,
+        cacheControl: "31536000",
+        upsert: false
+      });
+
+    if (error) throw new Error(`Supabase Storage upload failed: ${error.message}`);
+
+    const { data } = supabase.storage.from(PRODUCT_IMAGES_BUCKET).getPublicUrl(path);
+    uploadedImages.push(data.publicUrl);
+  }
+
+  return uploadedImages;
+}
+
 export async function findProductById(id: string) {
-  const products = await readProducts();
-  return products.find((product) => product.id === id) || null;
+  const supabase = getSupabaseAdminOrNull();
+  if (!supabase) return null;
+
+  const { data, error } = await supabase.from("products").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(`Supabase product read failed: ${error.message}`);
+  return data ? mapProductRow(data as ProductRow) : null;
 }
 
 export async function findProductBySlug(slug: string) {
-  const products = await readProducts();
-  return products.find((product) => product.slug === slug) || null;
+  const supabase = getSupabaseAdminOrNull();
+  if (!supabase) return null;
+
+  const { data, error } = await supabase.from("products").select("*").eq("slug", slug).maybeSingle();
+  if (error) throw new Error(`Supabase product read failed: ${error.message}`);
+  return data ? mapProductRow(data as ProductRow) : null;
 }
 
 export async function createProduct(payload: Partial<ProductPayload>) {
+  const supabase = getSupabaseAdmin();
   const products = await readProducts();
   const data = validateProductPayload(payload);
   const now = new Date().toISOString();
+  const id = randomUUID();
   const product: Product = {
-    id: randomUUID(),
+    id,
     slug: makeUniqueSlug(data.name, products),
     ...data,
+    images: await uploadProductImages(id, data.images),
     createdAt: now,
     updatedAt: now
   };
 
-  await writeProducts([product, ...products]);
-  return product;
+  const { data: inserted, error } = await supabase
+    .from("products")
+    .insert(toProductRow(product))
+    .select("*")
+    .single();
+
+  if (error) throw new Error(`Supabase product create failed: ${error.message}`);
+  return mapProductRow(inserted as ProductRow);
 }
 
 export async function updateProduct(id: string, payload: Partial<ProductPayload>) {
+  const supabase = getSupabaseAdmin();
   const products = await readProducts();
-  const index = products.findIndex((product) => product.id === id);
-  if (index === -1) return null;
+  const existingProduct = products.find((product) => product.id === id);
+  if (!existingProduct) return null;
 
   const data = validateProductPayload(payload);
   const product: Product = {
-    ...products[index],
+    ...existingProduct,
     ...data,
+    images: await uploadProductImages(id, data.images),
     slug: makeUniqueSlug(data.name, products, id),
     updatedAt: new Date().toISOString()
   };
 
-  products[index] = product;
-  await writeProducts(products);
-  return product;
+  const { data: updated, error } = await supabase
+    .from("products")
+    .update(toProductRow(product))
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) throw new Error(`Supabase product update failed: ${error.message}`);
+  return mapProductRow(updated as ProductRow);
 }
 
 export async function deleteProduct(id: string) {
-  const products = await readProducts();
-  const nextProducts = products.filter((product) => product.id !== id);
-  if (nextProducts.length === products.length) return false;
-  await writeProducts(nextProducts);
-  return true;
+  const supabase = getSupabaseAdmin();
+  const { error, count } = await supabase
+    .from("products")
+    .delete({ count: "exact" })
+    .eq("id", id);
+
+  if (error) throw new Error(`Supabase product delete failed: ${error.message}`);
+  return Boolean(count);
 }

@@ -1,86 +1,122 @@
 # A7-3DLAB Store
 
-Loja virtual simples e responsiva para produtos impressos em 3D, com catalogo, pagina de produto, painel administrativo, WhatsApp, Instagram, checkout mock do Mercado Pago e autenticacao com senha forte e 2FA.
+Loja virtual responsiva para produtos impressos em 3D, com painel administrativo, autenticacao segura, recuperacao de senha, 2FA TOTP, Mercado Pago preparado e persistencia em Supabase.
 
 ## Tecnologias
 
 - Next.js 16
 - React 19
 - Tailwind CSS 4
+- Supabase Postgres + Supabase Storage
 - API Routes do Next.js
-- Persistencia local em `src/data/products.json`
-- Auth local com `bcryptjs`, `otplib`, `qrcode` e `nodemailer`
+- `bcryptjs` para hash de senha
+- `otplib` + `qrcode` para 2FA TOTP
+- `nodemailer` para SMTP
 
-## Como instalar
+## Variaveis de ambiente
 
-```bash
-pnpm install
-cp .env.example .env.local
+Copie `.env.example` para `.env.local` e configure:
+
+```env
+NEXT_PUBLIC_STORE_NAME=A7-3DLAB
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
+NEXT_PUBLIC_WHATSAPP_NUMBER=5511999999999
+NEXT_PUBLIC_INSTAGRAM_URL=https://instagram.com/a7.3dlab
+
+NEXT_PUBLIC_SUPABASE_URL=https://seu-projeto.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+
+AUTH_ADMIN_EMAIL=admin@a7-3dlab.local
+AUTH_INITIAL_ADMIN_PASSWORD=A7-Admin-2026!
+AUTH_SESSION_SECRET=troque-este-segredo-longo-com-32-caracteres-ou-mais
+AUTH_RESET_TOKEN_TTL_MINUTES=30
+
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM=
+
+MERCADO_PAGO_ACCESS_TOKEN=
+MERCADO_PAGO_PUBLIC_KEY=
+MERCADO_PAGO_USE_MOCK=true
 ```
 
-No Windows, copie `.env.example` para `.env.local` manualmente se preferir.
+Nunca exponha `SUPABASE_SERVICE_ROLE_KEY` no frontend. O app usa essa chave apenas em rotas server-side e em `src/lib/supabase.ts`.
 
-## Como rodar
+## Supabase
 
-```bash
-pnpm dev
+Crie um projeto no Supabase e execute a migracao:
+
+```sql
+-- Arquivo completo em supabase/migrations/001_initial_schema.sql
 ```
 
-Abra `http://localhost:3000`.
+O SQL cria:
 
-Para build de producao:
+- `admin_users`
+- `password_reset_tokens`
+- `products`
+- `security_events`
+- `two_factor_recovery_codes`, tabela auxiliar para manter codigos de recuperacao do 2FA
 
-```bash
-pnpm build
-pnpm start
+### Bucket de imagens
+
+No painel do Supabase:
+
+1. Acesse **Storage**.
+2. Crie um bucket chamado `product-images`.
+3. Marque o bucket como **Public** para que as imagens dos produtos possam ser exibidas na loja.
+
+Opcional via SQL:
+
+```sql
+insert into storage.buckets (id, name, public)
+values ('product-images', 'product-images', true)
+on conflict (id) do update set public = excluded.public;
 ```
 
-## Autenticacao e painel administrativo
+O upload e feito pelo servidor com `SUPABASE_SERVICE_ROLE_KEY`. O frontend nunca recebe essa chave.
 
-O painel fica em `/admin` e redireciona para `/login` quando nao existe sessao valida. As APIs de cadastro, edicao e exclusao de produtos tambem verificam a sessao no backend.
+## Primeiro admin
 
-Credenciais iniciais de desenvolvimento:
+Na primeira tentativa de login, se a tabela `admin_users` estiver vazia, o app cria o admin inicial usando:
+
+```env
+AUTH_ADMIN_EMAIL
+AUTH_INITIAL_ADMIN_PASSWORD
+```
+
+A senha precisa cumprir a politica de senha forte. A senha inicial padrao de desenvolvimento e:
 
 ```text
 E-mail: admin@a7-3dlab.local
 Senha: A7-Admin-2026!
 ```
 
-Configure no `.env.local` antes de publicar:
+Depois do primeiro login, troque a senha em `/seguranca`.
 
-```env
-AUTH_ADMIN_EMAIL=admin@a7-3dlab.local
-AUTH_INITIAL_ADMIN_PASSWORD=A7-Admin-2026!
-AUTH_SESSION_SECRET=troque-este-segredo-longo-com-32-caracteres-ou-mais
-AUTH_RESET_TOKEN_TTL_MINUTES=30
-```
+## Autenticacao
 
-Depois do primeiro acesso, o app cria `src/data/auth.json` com o hash da senha, configuracoes de 2FA e tokens de recuperacao. Esse arquivo fica no `.gitignore` e nao deve ser commitado.
+O painel `/admin` e protegido por cookie HTTP-only assinado com `AUTH_SESSION_SECRET`.
 
-### Requisitos de senha
+Recursos incluidos:
 
-A senha precisa ter:
+- Login administrativo em `/login`
+- Troca de senha em `/seguranca`
+- Recuperacao em `/esqueci-senha`
+- Redefinicao em `/redefinir-senha?token=...`
+- Hash bcrypt de senha
+- Tokens de recuperacao armazenados apenas como hash
+- Rate limit em login, recuperacao, redefinicao, troca de senha e 2FA
+- Logs de eventos suspeitos em `security_events`
+- 2FA TOTP com QR Code e codigos de recuperacao
 
-- 8 caracteres ou mais
-- 1 letra maiuscula
-- 1 letra minuscula
-- 1 numero
-- 1 caractere especial
-- Nao estar na lista de senhas comuns, como `12345678`, `password`, `admin123` e `qwerty123`
+## E-mail
 
-A tela `/seguranca` mostra barra de forca em tempo real e checklist visual.
-
-### Troca de senha
-
-Entre no painel e acesse `/seguranca`. A troca exige senha atual, nova senha e confirmacao. Ao trocar, o app incrementa a versao de sessao do usuario, invalida sessoes antigas e cria uma nova sessao apenas para o navegador atual.
-
-### Recuperacao de senha
-
-Use `/esqueci-senha`. A resposta e sempre generica para nao revelar se o e-mail existe. O link enviado aponta para `/redefinir-senha?token=...`, expira conforme `AUTH_RESET_TOKEN_TTL_MINUTES` e o token e armazenado apenas como hash. Depois do uso, todos os tokens pendentes sao invalidados.
-
-### Envio de e-mail
-
-Para SMTP real, configure:
+Configure SMTP para enviar e-mails reais:
 
 ```env
 SMTP_HOST=smtp.seudominio.com
@@ -91,78 +127,13 @@ SMTP_PASSWORD=
 SMTP_FROM="A7-3DLAB <contato@seudominio.com>"
 ```
 
-Sem SMTP, o app usa modo dev e salva os e-mails em `src/data/dev-emails.json`. Isso permite testar recuperacao de senha localmente sem API paga. Esse arquivo tambem fica no `.gitignore`.
+Sem SMTP, o app imprime o conteudo do e-mail no log do servidor. Ele nao grava mais e-mails em arquivos locais.
 
-### Dupla autenticacao
+## Produtos e imagens
 
-O 2FA usa TOTP com `otplib`, compativel com Google Authenticator, Microsoft Authenticator e Authy. Em `/seguranca`:
+Produtos ficam na tabela `products`. O painel `/admin` permite criar, editar e excluir produtos.
 
-1. Clique em **Ativar 2FA**.
-2. Escaneie o QR Code no aplicativo autenticador.
-3. Informe o codigo de 6 digitos.
-4. Guarde os codigos de recuperacao exibidos.
-
-Quando o 2FA estiver ativo, o login exige senha e depois o codigo TOTP ou um codigo de recuperacao. A desativacao exige senha atual e codigo 2FA.
-
-### Seguranca implementada
-
-- Senhas salvas com hash bcrypt (`bcryptjs`) e salt.
-- Tokens de redefinicao armazenados apenas como hash SHA-256 de token aleatorio de alta entropia.
-- Cookies HTTP-only e assinados por HMAC.
-- Secrets somente no backend.
-- Rate limit em login, recuperacao, redefinicao, troca de senha e 2FA.
-- Logs de eventos suspeitos em `src/data/security-events.jsonl`.
-- Em producao, use HTTPS e defina um `AUTH_SESSION_SECRET` longo e unico.
-
-## Mercado Pago
-
-As variaveis ja estao preparadas:
-
-```env
-MERCADO_PAGO_ACCESS_TOKEN=
-MERCADO_PAGO_PUBLIC_KEY=
-MERCADO_PAGO_USE_MOCK=true
-```
-
-Por padrao, o botao **Comprar** usa um checkout mock em `/checkout-mock`. Para ativar a chamada real:
-
-1. Preencha `MERCADO_PAGO_ACCESS_TOKEN`.
-2. Ajuste `NEXT_PUBLIC_SITE_URL` para a URL publica da loja.
-3. Defina `MERCADO_PAGO_USE_MOCK=false`.
-
-O token privado fica apenas em codigo server-side, no arquivo `src/services/mercado-pago.ts`.
-
-## WhatsApp
-
-Edite no `.env.local`:
-
-```env
-NEXT_PUBLIC_WHATSAPP_NUMBER=5511999999999
-```
-
-Use DDI + DDD + numero, somente digitos. O botao fixo envia a mensagem:
-
-```text
-Ola! Tenho interesse em um produto personalizado de impressao 3D.
-```
-
-Produtos personalizados enviam uma mensagem com o nome do produto.
-
-## Instagram
-
-Edite no `.env.local`:
-
-```env
-NEXT_PUBLIC_INSTAGRAM_URL=https://instagram.com/a7.3dlab
-```
-
-O link aparece no cabecalho, rodape e secao inicial.
-
-## Produtos
-
-Os produtos de exemplo estao em `src/data/products.json`. Tambem e possivel criar, editar e excluir pelo painel administrativo.
-
-Campos suportados:
+Campos:
 
 - Nome
 - Descricao
@@ -173,9 +144,46 @@ Campos suportados:
 - Produto personalizado ou produto pronto
 - Destaque na pagina inicial
 
+Ao selecionar imagens no painel, o servidor envia os arquivos para o bucket `product-images` e salva as URLs publicas no array `products.images`.
+
+## Como rodar localmente
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Abra `http://localhost:3000`.
+
+Build:
+
+```bash
+pnpm build
+```
+
+## Publicar no Netlify
+
+1. Envie o projeto para um repositorio Git.
+2. No Netlify, conecte o repositorio.
+3. Configure:
+   - Build command: `pnpm build`
+   - Publish directory: `.next`
+4. Instale/ative o suporte do Netlify para Next.js se solicitado.
+5. Cadastre todas as variaveis de ambiente do Supabase, auth, SMTP, WhatsApp, Instagram e Mercado Pago em **Site configuration > Environment variables**.
+6. Em producao, defina `NEXT_PUBLIC_SITE_URL` com a URL publica do Netlify.
+
+## Mercado Pago
+
+Por padrao, o botao **Comprar** usa checkout mock em `/checkout-mock`. Para ativar a chamada real:
+
+1. Preencha `MERCADO_PAGO_ACCESS_TOKEN`.
+2. Ajuste `NEXT_PUBLIC_SITE_URL`.
+3. Defina `MERCADO_PAGO_USE_MOCK=false`.
+
+O token privado fica apenas em codigo server-side, em `src/services/mercado-pago.ts`.
+
 ## Proximos passos sugeridos
 
-- Trocar a persistencia local por Supabase, Firebase ou SQLite.
-- Adicionar upload de imagens para storage externo.
 - Criar webhooks do Mercado Pago para confirmar pagamento.
-- Adicionar controle de pedidos e status de producao.
+- Adicionar tabela de pedidos e status de producao.
+- Criar politicas RLS especificas se decidir acessar produtos diretamente pelo cliente anonimo.
