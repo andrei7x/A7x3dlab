@@ -18,30 +18,7 @@ Loja virtual responsiva para produtos impressos em 3D, com painel administrativo
 Copie `.env.example` para `.env.local` e configure:
 
 ```env
-NEXT_PUBLIC_STORE_NAME=A7-3DLAB
-NEXT_PUBLIC_SITE_URL=http://localhost:3000
-NEXT_PUBLIC_WHATSAPP_NUMBER=5511999999999
-NEXT_PUBLIC_INSTAGRAM_URL=https://instagram.com/a7.3dlab
 
-NEXT_PUBLIC_SUPABASE_URL=https://seu-projeto.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
-
-AUTH_ADMIN_EMAIL=admin@a7-3dlab.local
-AUTH_INITIAL_ADMIN_PASSWORD=A7-Admin-2026!
-AUTH_SESSION_SECRET=troque-este-segredo-longo-com-32-caracteres-ou-mais
-AUTH_RESET_TOKEN_TTL_MINUTES=30
-
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=
-SMTP_PASSWORD=
-SMTP_FROM=
-
-MERCADO_PAGO_ACCESS_TOKEN=
-MERCADO_PAGO_PUBLIC_KEY=
-MERCADO_PAGO_USE_MOCK=true
 ```
 
 Nunca exponha `SUPABASE_SERVICE_ROLE_KEY` no frontend. O app usa essa chave apenas em rotas server-side e em `src/lib/supabase.ts`.
