@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { getSupabaseAdminOrNull } from "@/lib/supabase";
+import { getSupabaseAdmin, getSupabaseAdminOrNull } from "@/lib/supabase";
 import { validateStrongPassword } from "@/lib/password-policy";
 
 const BCRYPT_ROUNDS = 12;
@@ -99,23 +99,45 @@ export async function createPasswordHash(password: string) {
   return hashPassword(password);
 }
 
-async function seedInitialAdminIfNeeded(supabase: SupabaseClient) {
-  const { data: existingUsers, error: existingError } = await supabase
-    .from("admin_users")
-    .select("id")
-    .limit(1);
-
-  if (existingError) throw new Error(`Supabase admin_users query failed: ${existingError.message}`);
-  if (existingUsers && existingUsers.length > 0) return;
-
+export async function createOrUpdateInitialAdmin() {
+  const supabase = getSupabaseAdmin();
+  const email = getInitialAdminEmail();
   const initialPassword = getInitialAdminPassword();
   validateStrongPassword(initialPassword);
+
+  const { data: existingUser, error: existingError } = await supabase
+    .from("admin_users")
+    .select("id, password_version, session_version")
+    .eq("email", email)
+    .maybeSingle();
+
+  if (existingError) {
+    throw new Error(`Supabase admin setup lookup failed: ${existingError.message}`);
+  }
+
   const now = new Date().toISOString();
+  const passwordHash = await hashPassword(initialPassword);
+
+  if (existingUser) {
+    const { error } = await supabase
+      .from("admin_users")
+      .update({
+        password_hash: passwordHash,
+        password_version: Number(existingUser.password_version || 1) + 1,
+        session_version: Number(existingUser.session_version || 1) + 1,
+        password_changed_at: now,
+        updated_at: now
+      })
+      .eq("id", existingUser.id);
+
+    if (error) throw new Error(`Supabase admin setup update failed: ${error.message}`);
+    return { created: false, email };
+  }
 
   const { error } = await supabase.from("admin_users").insert({
-    email: getInitialAdminEmail(),
+    email,
     name: "Administrador A7-3DLAB",
-    password_hash: await hashPassword(initialPassword),
+    password_hash: passwordHash,
     password_version: 1,
     session_version: 1,
     password_changed_at: now,
@@ -124,7 +146,8 @@ async function seedInitialAdminIfNeeded(supabase: SupabaseClient) {
     updated_at: now
   });
 
-  if (error) throw new Error(`Supabase admin seed failed: ${error.message}`);
+  if (error) throw new Error(`Supabase admin setup insert failed: ${error.message}`);
+  return { created: true, email };
 }
 
 function mapUserRow(
@@ -184,11 +207,40 @@ function toAdminUserRow(user: AuthUser) {
   };
 }
 
+async function readResetTokensForUser(supabase: SupabaseClient, userId: string) {
+  const { data, error } = await supabase
+    .from("password_reset_tokens")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(`Supabase password_reset_tokens read failed: ${error.message}`);
+  return (data || []) as PasswordResetTokenRow[];
+}
+
+async function readRecoveryCodesForUser(supabase: SupabaseClient, userId: string) {
+  const { data, error } = await supabase
+    .from("two_factor_recovery_codes")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw new Error(`Supabase two_factor_recovery_codes read failed: ${error.message}`);
+  return (data || []) as RecoveryCodeRow[];
+}
+
+async function mapUserRowWithRelations(supabase: SupabaseClient, row: AdminUserRow) {
+  const [resetTokens, recoveryCodes] = await Promise.all([
+    readResetTokensForUser(supabase, row.id),
+    readRecoveryCodesForUser(supabase, row.id)
+  ]);
+
+  return mapUserRow(row, resetTokens, recoveryCodes);
+}
+
 export async function readAuthStore() {
   const supabase = getSupabaseAdminOrNull();
   if (!supabase) return { users: [] } satisfies AuthStore;
-
-  await seedInitialAdminIfNeeded(supabase);
 
   const { data: userRows, error: usersError } = await supabase
     .from("admin_users")
@@ -300,11 +352,33 @@ export function sanitizeUser(user: AuthUser) {
 
 export async function findUserByEmail(email: string) {
   const normalizedEmail = email.trim().toLowerCase();
-  const store = await readAuthStore();
-  return store.users.find((user) => user.email === normalizedEmail) || null;
+  if (!normalizedEmail) return null;
+
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("admin_users")
+    .select("*")
+    .eq("email", normalizedEmail)
+    .maybeSingle();
+
+  if (error) throw new Error(`Supabase public.admin_users email lookup failed: ${error.message}`);
+  if (!data) return null;
+
+  return mapUserRowWithRelations(supabase, data as AdminUserRow);
 }
 
 export async function findUserById(id: string) {
-  const store = await readAuthStore();
-  return store.users.find((user) => user.id === id) || null;
+  if (!id) return null;
+
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("admin_users")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw new Error(`Supabase public.admin_users id lookup failed: ${error.message}`);
+  if (!data) return null;
+
+  return mapUserRowWithRelations(supabase, data as AdminUserRow);
 }
