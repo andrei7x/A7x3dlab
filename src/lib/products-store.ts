@@ -3,6 +3,13 @@ import { CATEGORIES, Product, ProductPayload } from "@/lib/types";
 import { getSupabaseAdmin, getSupabaseAdminOrNull } from "@/lib/supabase";
 
 const PRODUCT_IMAGES_BUCKET = "product-images";
+const MAX_PRODUCT_IMAGES = 5;
+const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp"
+};
 
 type ProductRow = {
   id: string;
@@ -108,6 +115,7 @@ export function validateProductPayload(payload: Partial<ProductPayload>) {
   if (!Number.isFinite(price) || price <= 0) throw new Error("Informe um preço válido.");
   if (!Number.isInteger(stock) || stock < 0) throw new Error("Informe um estoque válido.");
   if (images.length === 0) throw new Error("Adicione pelo menos uma foto do produto.");
+  if (images.length > MAX_PRODUCT_IMAGES) throw new Error("Adicione no máximo 5 fotos por produto.");
 
   return {
     name,
@@ -119,6 +127,35 @@ export function validateProductPayload(payload: Partial<ProductPayload>) {
     isCustomizable: Boolean(payload.isCustomizable),
     isFeatured: Boolean(payload.isFeatured)
   } satisfies ProductPayload;
+}
+
+export async function uploadProductImage(file: File) {
+  const extension = IMAGE_EXTENSIONS[file.type];
+  if (!extension) throw new Error("Envie uma imagem JPG, PNG ou WebP.");
+  if (file.size === 0 || file.size > MAX_UPLOAD_BYTES) {
+    throw new Error("A imagem deve ter até 3 MB. Tente outra foto ou reduza o tamanho.");
+  }
+
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const isPng = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const isWebp = bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
+  if (!({ "image/jpeg": isJpeg, "image/png": isPng, "image/webp": isWebp }[file.type])) {
+    throw new Error("O arquivo selecionado não é uma imagem válida.");
+  }
+
+  const path = `product-uploads/${randomUUID()}.${extension}`;
+  const { error } = await getSupabaseAdmin().storage
+    .from(PRODUCT_IMAGES_BUCKET)
+    .upload(path, bytes, {
+      contentType: file.type,
+      cacheControl: "31536000",
+      upsert: false
+    });
+
+  if (error) throw new Error(`Não foi possível enviar a imagem: ${error.message}`);
+  const { data } = getSupabaseAdmin().storage.from(PRODUCT_IMAGES_BUCKET).getPublicUrl(path);
+  return data.publicUrl;
 }
 
 function decodeDataUrl(dataUrl: string) {

@@ -2,7 +2,7 @@
 
 import { Edit3, ImagePlus, LogOut, PackagePlus, Save, ShieldCheck, Trash2, X } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { CATEGORIES, Category, Product, ProductPayload } from "@/lib/types";
 import { formatCurrency } from "@/lib/formatters";
 
@@ -29,12 +29,70 @@ const emptyForm: FormState = {
   isFeatured: false
 };
 
+const MAX_IMAGES = 5;
+const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 2.8 * 1024 * 1024;
+const ACCEPTED_IMAGE_TYPES = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"
+]);
+
+async function prepareImage(file: File): Promise<File> {
+  if (file.size <= MAX_UPLOAD_BYTES && !["image/heic", "image/heif"].includes(file.type)) {
+    return file;
+  }
+
+  let fallbackUrl: string | null = null;
+  let bitmap: ImageBitmap | HTMLImageElement;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    fallbackUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.src = fallbackUrl;
+    try {
+      await image.decode();
+    } catch {
+      URL.revokeObjectURL(fallbackUrl);
+      throw new Error("Não foi possível abrir esta foto. Converta-a para JPG e tente novamente.");
+    }
+    bitmap = image;
+  }
+  try {
+    for (const maxSide of [2000, 1600, 1200]) {
+      const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Não foi possível processar esta imagem.");
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+      for (const quality of [0.84, 0.7, 0.58]) {
+        const blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob(resolve, "image/jpeg", quality)
+        );
+        if (blob && blob.size <= MAX_UPLOAD_BYTES) {
+          return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", {
+            type: "image/jpeg"
+          });
+        }
+      }
+    }
+    throw new Error("A foto ficou muito grande. Reduza-a antes de enviar.");
+  } finally {
+    if ("close" in bitmap) bitmap.close();
+    if (fallbackUrl) URL.revokeObjectURL(fallbackUrl);
+  }
+}
+
 export function AdminDashboard() {
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [products, setProducts] = useState<Product[]>([]);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [draggingImages, setDraggingImages] = useState(false);
+  const pendingFiles = useRef(new Map<string, File>());
 
   const editing = useMemo(() => Boolean(form.id), [form.id]);
 
@@ -63,29 +121,61 @@ export function AdminDashboard() {
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
     setProducts([]);
+    clearPendingImages();
     setForm(emptyForm);
     window.location.href = "/login";
   }
 
-  async function handleFiles(files: FileList | null) {
-    if (!files?.length) return;
+  function clearPendingImages() {
+    for (const url of pendingFiles.current.keys()) URL.revokeObjectURL(url);
+    pendingFiles.current.clear();
+  }
 
-    const dataUrls = await Promise.all(
-      Array.from(files).map(
-        (file) =>
-          new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result));
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(file);
-          })
-      )
-    );
+  function handleFiles(files: FileList | File[] | null) {
+    if (!files?.length || busy) return;
+    const selected = Array.from(files);
+    if (form.images.length + selected.length > MAX_IMAGES) {
+      setMessage(`Cada produto pode ter até ${MAX_IMAGES} fotos. Remova alguma antes de adicionar outras.`);
+      return;
+    }
+    if (selected.some((file) => !ACCEPTED_IMAGE_TYPES.has(file.type))) {
+      setMessage("Selecione apenas fotos JPG, PNG, WebP ou HEIC.");
+      return;
+    }
+    if (selected.some((file) => file.size === 0 || file.size > MAX_SOURCE_BYTES)) {
+      setMessage("Cada foto deve ter até 25 MB antes da otimização.");
+      return;
+    }
 
-    setForm((current) => ({ ...current, images: [...current.images, ...dataUrls] }));
+    const previews = selected.map((file) => {
+      const url = URL.createObjectURL(file);
+      pendingFiles.current.set(url, file);
+      return url;
+    });
+    setForm((current) => ({ ...current, images: [...current.images, ...previews] }));
+    setMessage("");
+  }
+
+  function handleImageDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDraggingImages(false);
+    handleFiles(event.dataTransfer.files);
+  }
+
+  function removeImage(index: number) {
+    const image = form.images[index];
+    if (pendingFiles.current.has(image)) {
+      URL.revokeObjectURL(image);
+      pendingFiles.current.delete(image);
+    }
+    setForm((current) => ({
+      ...current,
+      images: current.images.filter((_, imageIndex) => imageIndex !== index)
+    }));
   }
 
   function editProduct(product: Product) {
+    clearPendingImages();
     setForm({
       id: product.id,
       name: product.name,
@@ -124,34 +214,66 @@ export function AdminDashboard() {
     setBusy(true);
     setMessage("");
 
-    const payload: ProductPayload = {
-      name: form.name,
-      description: form.description,
-      category: form.category,
-      price: Number(form.price),
-      images: form.images,
-      stock: Number(form.stock),
-      isCustomizable: form.isCustomizable,
-      isFeatured: form.isFeatured
-    };
+    try {
+      if (form.images.length === 0) throw new Error("Adicione pelo menos uma foto do produto.");
+      const images: string[] = [];
+      let uploaded = 0;
+      const total = form.images.filter((image) => pendingFiles.current.has(image)).length;
 
-    const response = await fetch(editing ? `/api/products/${form.id}` : "/api/products", {
-      method: editing ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+      for (const image of form.images) {
+        const file = pendingFiles.current.get(image);
+        if (!file) {
+          images.push(image);
+          continue;
+        }
 
-    const data = await response.json();
-    setBusy(false);
+        setMessage(`Enviando foto ${++uploaded} de ${total}...`);
+        const uploadData = new FormData();
+        uploadData.append("image", await prepareImage(file));
+        const uploadResponse = await fetch("/api/products/images", {
+          method: "POST",
+          body: uploadData
+        });
+        const result = await uploadResponse.json();
+        if (!uploadResponse.ok) throw new Error(result.error || "Não foi possível enviar a foto.");
 
-    if (!response.ok) {
-      setMessage(data.error || "Não foi possível salvar.");
-      return;
+        images.push(result.url);
+        pendingFiles.current.delete(image);
+        URL.revokeObjectURL(image);
+        setForm((current) => ({
+          ...current,
+          images: current.images.map((url) => (url === image ? result.url : url))
+        }));
+      }
+
+      setMessage("Salvando produto...");
+      const payload: ProductPayload = {
+        name: form.name,
+        description: form.description,
+        category: form.category,
+        price: Number(form.price),
+        images,
+        stock: Number(form.stock),
+        isCustomizable: form.isCustomizable,
+        isFeatured: form.isFeatured
+      };
+      const response = await fetch(editing ? `/api/products/${form.id}` : "/api/products", {
+        method: editing ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Não foi possível salvar.");
+
+      setMessage(editing ? "Produto atualizado." : "Produto cadastrado.");
+      clearPendingImages();
+      setForm(emptyForm);
+      await loadProducts();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível salvar o produto.");
+    } finally {
+      setBusy(false);
     }
-
-    setMessage(editing ? "Produto atualizado." : "Produto cadastrado.");
-    setForm(emptyForm);
-    await loadProducts();
   }
 
   if (checkingAuth) {
@@ -200,7 +322,12 @@ export function AdminDashboard() {
             {editing ? (
               <button
                 type="button"
-                onClick={() => setForm(emptyForm)}
+              onClick={() => {
+                clearPendingImages();
+                setForm(emptyForm);
+                setMessage("");
+              }}
+              disabled={busy}
                 className="inline-flex items-center gap-2 rounded-lg border border-[#d8dee8] px-3 py-2 text-sm font-black"
               >
                 <X size={16} />
@@ -271,20 +398,43 @@ export function AdminDashboard() {
           </div>
 
           <div className="mt-5 grid gap-4">
-            <label className="admin-label">
-              Fotos
-              <span className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-[#98a2b3] bg-[#f7f8fb] px-4 py-7 text-[#344054] hover:border-[#1668e8] hover:text-[#1668e8]">
-                <ImagePlus size={20} />
-                Selecionar imagens
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onChange={(event) => handleFiles(event.target.files)}
-                />
-              </span>
-            </label>
+            <div className="admin-label">
+              <span>Fotos ({form.images.length}/{MAX_IMAGES})</span>
+              <div
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  if (!busy) setDraggingImages(true);
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                    setDraggingImages(false);
+                  }
+                }}
+                onDrop={handleImageDrop}
+                className={`rounded-lg border-2 border-dashed text-center transition-colors ${
+                  draggingImages
+                    ? "border-[#1668e8] bg-[#eaf3ff]"
+                    : "border-[#98a2b3] bg-[#f7f8fb] hover:border-[#1668e8]"
+                }`}
+              >
+                <label className={`flex flex-col items-center justify-center gap-2 px-4 py-7 text-[#344054] ${busy || form.images.length >= MAX_IMAGES ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                  <ImagePlus size={24} aria-hidden="true" />
+                  <span className="font-bold">Arraste fotos para cá ou clique para selecionar</span>
+                  <span className="text-sm font-normal">Até 5 fotos JPG, PNG, WebP ou HEIC. A primeira foto será a capa do produto.</span>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                    multiple
+                    disabled={busy || form.images.length >= MAX_IMAGES}
+                    className="sr-only"
+                    onChange={(event) => {
+                      handleFiles(event.currentTarget.files);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
             {form.images.length > 0 ? (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
                 {form.images.map((image, index) => (
@@ -292,12 +442,9 @@ export function AdminDashboard() {
                     <img src={image} alt="" className="h-full w-full object-cover" />
                     <button
                       type="button"
-                      onClick={() =>
-                        setForm((current) => ({
-                          ...current,
-                          images: current.images.filter((_, imageIndex) => imageIndex !== index)
-                        }))
-                      }
+                      onClick={() => removeImage(index)}
+                      disabled={busy}
+                      aria-label={`Remover foto ${index + 1}`}
                       className="absolute right-2 top-2 grid size-8 place-items-center rounded-lg bg-white text-red-600 shadow"
                     >
                       <Trash2 size={15} />
@@ -371,6 +518,7 @@ export function AdminDashboard() {
                 <button
                   type="button"
                   onClick={() => editProduct(product)}
+                  disabled={busy}
                   className="inline-flex items-center gap-2 rounded-lg border border-[#d8dee8] px-4 py-2 font-black hover:border-[#1668e8] hover:text-[#1668e8]"
                 >
                   <Edit3 size={17} />
@@ -379,6 +527,7 @@ export function AdminDashboard() {
                 <button
                   type="button"
                   onClick={() => deleteProduct(product)}
+                  disabled={busy}
                   className="inline-flex items-center gap-2 rounded-lg border border-[#ffd0d0] px-4 py-2 font-black text-red-600 hover:bg-red-50"
                 >
                   <Trash2 size={17} />
